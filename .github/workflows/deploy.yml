@@ -1,0 +1,58 @@
+name: CI/CD Pipeline - Docker Build, Push & EC2 Deploy
+
+# Trigger automatically whenever code is pushed to the 'main' branch
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  # ========================================================
+  # 1. CI JOB: Build Docker Image & Push to Docker Hub
+  # ========================================================
+  build-and-push:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository Code
+        uses: actions/checkout@v4
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and Push Docker Image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: ${{ secrets.DOCKERHUB_USERNAME }}/marvel-app:latest
+
+  # ========================================================
+  # 2. CD JOB: SSH to EC2, Pull Image & Restart Container
+  # ========================================================
+  deploy:
+    needs: build-and-push # Only deploy if the build succeeded!
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: SSH into EC2 and Deploy Container
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script: |
+            echo "--- Step 1: Pulling latest image from Docker Hub ---"
+            docker pull ${{ secrets.DOCKERHUB_USERNAME }}/marvel-app:latest
+
+            echo "--- Step 2: Stopping and removing previous container ---"
+            docker stop marvel-container || true
+            docker rm marvel-container || true
+
+            echo "--- Step 3: Starting updated container on Port 80 ---"
+            docker run -d --name marvel-container -p 80:80 --restart unless-stopped ${{ secrets.DOCKERHUB_USERNAME }}/marvel-app:latest
+
+            echo "--- Deployment Complete! ---"
